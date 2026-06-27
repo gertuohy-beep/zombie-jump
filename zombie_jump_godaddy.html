@@ -1,0 +1,1772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Zombie Jump</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  #gameContainer {
+    position: relative;
+    width: 480px;
+    max-width: 100vw;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  #mobileControls {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 80px;
+    background: rgba(0,0,0,0.7);
+    justify-content: space-around;
+    align-items: center;
+    z-index: 10;
+  }
+  .ctrl-btn {
+    width: 70px;
+    height: 60px;
+    background: rgba(80,200,80,0.3);
+    border: 2px solid #4c4;
+    border-radius: 10px;
+    color: #4c4;
+    font-size: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s;
+  }
+  .ctrl-btn:active { background: rgba(80,200,80,0.6); }
+  @media (max-width: 600px) {
+    #mobileControls { display: flex; }
+  }
+  @media (hover: none) and (pointer: coarse) {
+    #mobileControls { display: flex; }
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="gameCanvas" width="480" height="640"></canvas>
+  <div id="mobileControls">
+    <div class="ctrl-btn" id="btnLeft">&#8592;</div>
+    <div class="ctrl-btn" id="btnJump">&#11014;</div>
+    <div class="ctrl-btn" id="btnRight">&#8594;</div>
+  </div>
+</div>
+
+<script>
+// ─── SOUND SYSTEM ────────────────────────────────────────────────────────────
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function getAudio() { if (!audioCtx) audioCtx = new AudioCtx(); return audioCtx; }
+
+function playTone(freq, type, dur, vol=0.25, fade=true) {
+  try {
+    const ac = getAudio(); const o = ac.createOscillator(); const g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.type = type; o.frequency.setValueAtTime(freq, ac.currentTime);
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    if (fade) g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.start(); o.stop(ac.currentTime + dur);
+  } catch(e) {}
+}
+function playNoise(dur, vol=0.12, bandHz=200) {
+  try {
+    const ac = getAudio(); const buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+    const d = buf.getChannelData(0); for (let i=0;i<d.length;i++) d[i]=(Math.random()*2-1);
+    const src = ac.createBufferSource(); const g = ac.createGain();
+    const f = ac.createBiquadFilter(); f.type='bandpass'; f.frequency.value=bandHz;
+    src.buffer=buf; src.connect(f); f.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+dur);
+    src.start(); src.stop(ac.currentTime+dur);
+  } catch(e) {}
+}
+
+const sounds = {
+  jump()   { playTone(220,'sine',0.06,0.18,false); setTimeout(()=>playTone(440,'sine',0.12,0.12),60); },
+  land()   { playTone(110,'square',0.05,0.18); playNoise(0.05,0.08); },
+  splat()  { playTone(160,'sawtooth',0.07,0.22,false); setTimeout(()=>playTone(80,'sawtooth',0.14,0.18),70); playNoise(0.15,0.18); },
+  bump()   { playTone(280,'square',0.04,0.25,false); setTimeout(()=>playTone(140,'square',0.1,0.18),50); playNoise(0.07,0.12); },
+  zombie() { playTone(80,'sawtooth',0.07,0.28,false); setTimeout(()=>playTone(55,'sawtooth',0.18,0.22),80); playNoise(0.1,0.22); },
+  die()    { [200,160,120,80].forEach((f,i)=>setTimeout(()=>playTone(f,'sawtooth',0.14,0.28),i*100)); playNoise(0.35,0.28); },
+  scream() {
+    // Rising then falling "AAARGH" scream for losing a life
+    try {
+      const ac = getAudio();
+      const o = ac.createOscillator(); const g = ac.createGain();
+      o.connect(g); g.connect(ac.destination);
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(300, ac.currentTime);
+      o.frequency.linearRampToValueAtTime(800, ac.currentTime + 0.15);
+      o.frequency.linearRampToValueAtTime(200, ac.currentTime + 0.5);
+      g.gain.setValueAtTime(0.35, ac.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.55);
+      o.start(); o.stop(ac.currentTime + 0.55);
+      // Vibrato layer
+      const o2 = ac.createOscillator(); const g2 = ac.createGain();
+      o2.connect(g2); g2.connect(ac.destination);
+      o2.type = 'square'; o2.frequency.value = 280;
+      g2.gain.setValueAtTime(0.12, ac.currentTime + 0.1);
+      g2.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.45);
+      o2.start(ac.currentTime + 0.1); o2.stop(ac.currentTime + 0.45);
+    } catch(e) {}
+  },
+  cry(duration) {
+    // Repeating sob/cry sound while doing the ground-thump animation
+    // Plays multiple times over the animation duration
+    try {
+      const ac = getAudio();
+      const totalSecs = (duration || 180) / 60;
+      const sobCount = Math.floor(totalSecs / 0.7);
+      for (let i = 0; i < sobCount; i++) {
+        const t0 = ac.currentTime + i * 0.7;
+        // Sob: rising whimper then drop
+        const o = ac.createOscillator(); const g = ac.createGain();
+        o.connect(g); g.connect(ac.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(220, t0);
+        o.frequency.linearRampToValueAtTime(380, t0 + 0.15);
+        o.frequency.linearRampToValueAtTime(180, t0 + 0.4);
+        g.gain.setValueAtTime(0.0, t0);
+        g.gain.linearRampToValueAtTime(0.22, t0 + 0.05);
+        g.gain.linearRampToValueAtTime(0.18, t0 + 0.35);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.55);
+        o.start(t0); o.stop(t0 + 0.58);
+        // Thump sound for fist hitting floor (every other sob)
+        if (i % 2 === 0) {
+          const o2 = ac.createOscillator(); const g2 = ac.createGain();
+          o2.connect(g2); g2.connect(ac.destination);
+          o2.type = 'square'; o2.frequency.value = 60;
+          g2.gain.setValueAtTime(0.25, t0 + 0.28);
+          g2.gain.exponentialRampToValueAtTime(0.001, t0 + 0.42);
+          o2.start(t0 + 0.28); o2.stop(t0 + 0.43);
+        }
+      }
+    } catch(e) {}
+  },
+  levelUp(){ [330,392,494,659].forEach((f,i)=>setTimeout(()=>playTone(f,'sine',0.16,0.22),i*90)); },
+  escape() { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>playTone(f,'sine',0.28,0.28),i*110)); },
+};
+
+// ── SPLASH MUSIC ──────────────────────────────────────────────────────────────
+// Spooky-catchy 8-bar loop using Web Audio API
+let splashMusicInterval = null;
+let splashMusicRunning = false;
+
+function startSplashMusic() {
+  if (splashMusicRunning) return;
+  splashMusicRunning = true;
+
+  // Melody notes: creepy minor key tune (A minor feel)
+  // Format: [freq, duration_ms, vol]
+  const melody = [
+    [220,200,0.18],[0,50],[261,150,0.15],[0,50],[220,200,0.18],[0,50],[196,300,0.16],
+    [0,100],[175,200,0.14],[0,50],[196,150,0.15],[0,50],[220,400,0.18],[0,200],
+    [247,200,0.15],[0,50],[220,150,0.14],[0,50],[196,200,0.15],[0,50],[175,300,0.14],
+    [0,100],[165,200,0.13],[0,50],[175,150,0.12],[0,50],[196,400,0.15],[0,200],
+    [220,200,0.18],[0,50],[261,150,0.15],[0,50],[294,200,0.16],[0,50],[330,300,0.18],
+    [0,100],[294,200,0.15],[0,50],[261,150,0.14],[0,50],[247,400,0.16],[0,200],
+    [220,200,0.18],[0,100],[196,200,0.15],[0,100],[175,200,0.14],[0,100],[165,600,0.18],
+    [0,400],
+  ];
+
+  // Bass line (alternates with melody)
+  const bass = [
+    [110,400,0.1],[0,200],[110,300,0.08],[0,100],[98,400,0.1],[0,200],[110,300,0.08],[0,100],
+    [87,400,0.1],[0,200],[98,300,0.08],[0,100],[110,400,0.1],[0,200],[110,300,0.08],[0,500],
+  ];
+
+  let melIdx = 0, bassIdx = 0;
+
+  function playMelNote() {
+    if (!splashMusicRunning) return;
+    const note = melody[melIdx % melody.length];
+    melIdx++;
+    const [freq, dur, vol] = note;
+    if (freq > 0) playTone(freq, 'square', dur/1000 * 0.9, vol || 0.15);
+    splashMusicInterval = setTimeout(playMelNote, dur || 50);
+  }
+
+  function playBassNote() {
+    if (!splashMusicRunning) return;
+    const note = bass[bassIdx % bass.length];
+    bassIdx++;
+    const [freq, dur, vol] = note;
+    if (freq > 0) playTone(freq, 'triangle', dur/1000 * 0.85, vol || 0.08);
+    setTimeout(playBassNote, dur || 200);
+  }
+
+  try {
+    getAudio(); // init audio context
+    playMelNote();
+    setTimeout(playBassNote, 600); // offset bass slightly
+  } catch(e) {}
+}
+
+function stopSplashMusic() {
+  splashMusicRunning = false;
+  if (splashMusicInterval) { clearTimeout(splashMusicInterval); splashMusicInterval = null; }
+}
+
+// ── SAD / GAME-OVER MUSIC (plays on zombified screen) ────────────────────────
+let sadMusicRunning = false;
+let sadMusicTimeout = null;
+
+function startSadMusic() {
+  if (sadMusicRunning) return;
+  sadMusicRunning = true;
+  stopSplashMusic();
+
+  // Slow, mournful descending minor tune
+  const notes = [
+    [262,400,0.12],[0,100],[220,300,0.10],[0,100],[196,300,0.10],[0,100],
+    [175,500,0.12],[0,200],
+    [196,300,0.10],[0,100],[175,300,0.10],[0,100],[165,300,0.09],[0,100],
+    [147,700,0.12],[0,300],
+    [175,300,0.10],[0,100],[165,300,0.09],[0,100],[147,400,0.10],[0,100],
+    [131,600,0.12],[0,300],
+    [147,300,0.09],[0,100],[131,300,0.09],[0,100],[110,400,0.10],[0,100],
+    [98, 900,0.12],[0,500],
+  ];
+  // Low bass drone
+  const bass = [
+    [65,800,0.07],[0,200],[55,800,0.07],[0,200],[49,800,0.06],[0,200],[41,900,0.07],[0,300],
+  ];
+
+  let ni = 0, bi = 0;
+  function playNote() {
+    if (!sadMusicRunning) return;
+    const [f, d, v] = notes[ni % notes.length]; ni++;
+    if (f > 0) playTone(f, 'sine', d/1000 * 0.88, v);
+    sadMusicTimeout = setTimeout(playNote, d || 100);
+  }
+  function playBass() {
+    if (!sadMusicRunning) return;
+    const [f, d, v] = bass[bi % bass.length]; bi++;
+    if (f > 0) playTone(f, 'triangle', d/1000 * 0.9, v);
+    setTimeout(playBass, d || 200);
+  }
+
+  try {
+    getAudio();
+    playNote();
+    setTimeout(playBass, 400);
+  } catch(e) {}
+}
+
+function stopSadMusic() {
+  sadMusicRunning = false;
+  if (sadMusicTimeout) { clearTimeout(sadMusicTimeout); sadMusicTimeout = null; }
+}
+
+let footTick = 0;
+function tickFootstep() {
+  footTick++;
+  if (footTick % 14 === 0) {
+    try {
+      const ac = getAudio(); const o = ac.createOscillator(); const g = ac.createGain();
+      o.connect(g); g.connect(ac.destination); o.type='square';
+      o.frequency.value = footTick%28===0 ? 85 : 105;
+      g.gain.setValueAtTime(0.06, ac.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime+0.04);
+      o.start(); o.stop(ac.currentTime+0.04);
+    } catch(e) {}
+  }
+}
+
+// ─── ASSET DATA ───────────────────────────────────────────────────────────────
+
+
+
+
+// ─── CANVAS SETUP ─────────────────────────────────────────────────────────────
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const W = 480, H = 640;
+
+// ─── GAME CONSTANTS ───────────────────────────────────────────────────────────
+const FLOOR_COUNT = 8;
+const FLOOR_H     = 16;
+const HERO_W = 28, HERO_H = 44;
+
+// GROUND: solid base, hero starts here
+const GROUND_Y    = H - 80;
+// DANGER FLOORS: evenly spaced above ground
+const FLOOR_SPACING = 60;
+const FLOOR0_Y      = GROUND_Y - FLOOR_SPACING;
+const PLATFORM_Y    = [];
+for (let i = 0; i < FLOOR_COUNT; i++) {
+  PLATFORM_Y[i] = FLOOR0_Y - (i * FLOOR_SPACING);
+}
+
+const MOVE_SPEED = 2.5;
+const GAP_W      = 56;   // slightly wider gap for fairer play
+const MAX_GAPS   = 8;
+const MAX_LIVES = 3;
+const MAX_LEVELS = 20;
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let state = 'splash'; // splash | playing | dead | win | levelup
+let inputLockout = 0; // frames to ignore input after state change
+let deadTimer = 0; // frames to show dead screen before accepting input
+let score = 0, lives = MAX_LIVES, level = 1;
+let hero, gaps, zombies, particles;
+let stunTimer = 0, levelTimer = 0;
+let heroImg, heroRunImg, heroRun2Img, heroJump1Img, heroJump2Img, heroSplashImg, fall1Img, fall2Img, imagesLoaded = 0;
+let flashTimer = 0, flashOn = true;
+let animFrame = 0, animTick = 0;
+let keys = {left:false, right:false, jump:false};
+let jumpPressed = false, prevJump = false;
+let mobileLeft = false, mobileRight = false, mobileJump = false;
+
+// ─── SPRITE DRAWING FUNCTIONS ─────────────────────────────────────────────────
+// ─── HERO ANIMATION STATE ─────────────────────────────────────────────────────
+// hero.animState: 'idle' | 'run' | 'jump' | 'bump' | 'fall' | 'stun'
+// hero.runFrame:  0-3 cycling walk frames
+// hero.runTick:   counter to advance runFrame
+
+function getHeroAnimState() {
+  if (hero.groundHitAnim > 0) return 'ground';
+  if (hero.jumpAnim > 0) return hero.jumpResult === 'bump' ? 'bump' : 'jump';
+  if (hero.fallAnim > 0) return 'fall';
+  if (stunTimer > 0)     return 'stun';
+  if (hero.vx !== 0)     return 'run';
+  return 'idle';
+}
+
+function drawHeroSprite(x, y, w, h, facingLeft, stunned, jumping) {
+  const state = getHeroAnimState();
+
+  // ── Run frame advance (8 ticks/frame ≈ 7.5fps) ────────────────────────────
+  if (state === 'run') {
+    hero.runTick = (hero.runTick || 0) + 1;
+    if (hero.runTick >= 8) { hero.runTick = 0; hero.runFrame = ((hero.runFrame || 0) + 1) % 4; }
+    tickFootstep();
+  } else {
+    hero.runTick = 0; hero.runFrame = 0;
+  }
+
+  // ── Idle head-look: look left/right anxiously ──────────────────────────────
+  if (state === 'idle') {
+    hero.idleTick = (hero.idleTick || 0) + 1;
+    const cycle = hero.idleTick % 170;
+    if      (cycle < 60)  hero.idleLook = 0;
+    else if (cycle < 100) hero.idleLook = 1;
+    else if (cycle < 130) hero.idleLook = 0;
+    else                  hero.idleLook = -1;
+  } else {
+    hero.idleTick = 0; hero.idleLook = 0;
+  }
+
+  if ((hero.squashAnim || 0) > 0) hero.squashAnim--;
+
+  let jumpPhase = 0;
+  if (hero.jumpAnim > 0) { const t = 1 - hero.jumpAnim / hero.jumpAnimMax; jumpPhase = Math.sin(t * Math.PI); }
+
+  let tumbleAngle = 0;
+  if (state === 'fall' && hero.fallAnim > 0) { const t = 1 - hero.fallAnim / hero.fallAnimMax; tumbleAngle = t * Math.PI * 2; }
+
+  let bumpPhase = 0;
+  if (state === 'bump' && hero.jumpAnim > 0) { const t = 1 - hero.jumpAnim / hero.jumpAnimMax; bumpPhase = Math.sin(t * Math.PI); }
+
+  // hero.png faces LEFT — flip when going RIGHT
+  const shouldFlip = !facingLeft;
+  const cx = x + w / 2;
+  const cy = y + h;
+
+  ctx.save();
+  if (state === 'stun') ctx.globalAlpha = 0.55 + 0.45 * Math.sin(Date.now() / 80);
+  if (stunned && state !== 'stun') { ctx.globalAlpha = 0.7; ctx.filter = 'hue-rotate(180deg)'; }
+
+  if (state === 'ground') {
+    // Hero lying on floor thumping in anger — use landscape fall sprites
+    ctx.restore(); // restore the base save first
+    const gFrame = Math.floor(hero.groundHitAnim / 15) % 2; // alternate every 15 frames
+    const fallSrc = (gFrame === 0 && fall1Img && fall1Img.complete) ? fall1Img
+                  : (fall2Img && fall2Img.complete) ? fall2Img
+                  : null;
+    if (fallSrc) {
+      // Preserve each sprite's natural aspect ratio so images aren't distorted
+      // fall1 (portrait, fists raised): height = HERO_H, width from aspect ratio
+      // fall2 (landscape, lying flat):  height = HERO_W (body thickness), width from aspect ratio
+      const isF1 = (gFrame === 0);
+      const imgW = fallSrc.naturalWidth  || fallSrc.width;
+      const imgH = fallSrc.naturalHeight || fallSrc.height;
+      const aspect = imgW / imgH;
+      const sh = isF1 ? HERO_H : HERO_W;          // target height in canvas px
+      const sw = sh * aspect;                       // width preserving aspect ratio
+      // Anchor: bottom of sprite sits exactly on GROUND_Y (= y + HERO_H)
+      const drawX = x + HERO_W / 2 - sw / 2;       // horizontally centred on hero
+      const drawY = y + HERO_H - sh;               // bottom of sprite = floor level
+      ctx.drawImage(fallSrc, drawX, drawY, sw, sh);
+    }
+    // Orbiting stun stars even during ground hit
+    const ts = Date.now() / 300;
+    for (let i = 0; i < 3; i++) {
+      const ang = ts + i * (Math.PI * 2 / 3);
+      ctx.save();
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillStyle = i === 0 ? '#ff0' : i === 1 ? '#f80' : '#f00';
+      ctx.fillText(i === 0 ? '★' : i === 1 ? '★' : '★',
+        x + HERO_W/2 + Math.cos(ang) * 20 - 5, y - 5 + Math.sin(ang) * 8);
+      ctx.restore();
+    }
+    return;
+
+  } else if (state === 'fall') {
+    ctx.translate(cx, y + h / 2);
+    ctx.rotate(tumbleAngle);
+    ctx.filter = (stunned ? 'hue-rotate(180deg) ' : '') + 'hue-rotate(20deg) saturate(1.4)';
+    ctx.drawImage(heroImg, -w/2, -h/2, w, h);
+    ctx.restore();
+
+  } else if (state === 'bump') {
+    const tilt = bumpPhase * 0.25;
+    ctx.translate(cx, cy); ctx.rotate(-tilt);
+    if (shouldFlip) ctx.scale(-1, 1);
+    ctx.drawImage(heroImg, -w/2, -h, w, h);
+    ctx.restore();
+
+  } else if (state === 'jump') {
+    // jump1 = crouching/launch pose (first half), jump2 = arms-up peak pose (second half)
+    const useJump2 = jumpPhase > 0.4;
+    const j1ok = heroJump1Img && heroJump1Img.complete;
+    const j2ok = heroJump2Img && heroJump2Img.complete;
+    const jumpSrc = useJump2 ? (j2ok ? heroJump2Img : (j1ok ? heroJump1Img : heroImg))
+                             : (j1ok ? heroJump1Img : heroImg);
+    ctx.translate(cx, cy);
+    ctx.scale(shouldFlip ? -1 : 1, 1);
+    ctx.drawImage(jumpSrc, -w/2, -h, w, h);
+    ctx.restore();
+
+  } else if (state === 'run') {
+    const frame = hero.runFrame || 0;
+    const bob = [0, -2, 0, -2][frame];
+    ctx.translate(cx, cy + bob);
+    if (shouldFlip) ctx.scale(-1, 1);
+    // Alternate between run1 and run2 images for a walking cycle
+    const useRun2 = (frame === 1 || frame === 3);
+    const r1ok = heroRunImg  && heroRunImg.complete;
+    const r2ok = heroRun2Img && heroRun2Img.complete;
+    const runSrc = useRun2 ? (r2ok ? heroRun2Img : (r1ok ? heroRunImg : heroImg))
+                           : (r1ok ? heroRunImg  : heroImg);
+    ctx.drawImage(runSrc, -w/2, -h, w, h);
+    ctx.restore();
+
+  } else {
+    // Idle / stun
+    ctx.translate(cx, cy);
+    if ((hero.squashAnim || 0) > 0) { const sq = hero.squashAnim / 6; ctx.scale(1 + sq * 0.15, 1 - sq * 0.12); }
+    if (shouldFlip) ctx.scale(-1, 1);
+    ctx.drawImage(heroImg, -w/2, -h, w, h);
+    ctx.restore();
+    // Idle look overlay — draw eye-glow in look direction
+    if (state === 'idle' && hero.idleLook !== 0) drawIdleLook(x, y, w, h, hero.idleLook, shouldFlip);
+  }
+
+  // Stun stars orbit hero head
+  if (stunned) {
+    const t = Date.now() / 300;
+    for (let i = 0; i < 3; i++) {
+      const ang = t + i * (Math.PI * 2 / 3);
+      ctx.save();
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillStyle = i === 0 ? '#ff0' : i === 1 ? '#f80' : '#fff';
+      ctx.fillText(i === 0 ? '★' : i === 1 ? '✦' : '★',
+        x + w/2 + Math.cos(ang) * 16 - 5, y + 4 + Math.sin(ang) * 7);
+      ctx.restore();
+    }
+  }
+  // Bump impact stars
+  if (state === 'bump' && bumpPhase > 0.3 && bumpPhase < 0.7) {
+    for (let i = 0; i < 4; i++) {
+      const ang = (Date.now() / 100) + i * Math.PI / 2;
+      ctx.save(); ctx.fillStyle = '#ffff00'; ctx.font = '11px sans-serif';
+      ctx.fillText('*', x + w/2 + Math.cos(ang) * 12 - 4, y - 2 + Math.sin(ang) * 5);
+      ctx.restore();
+    }
+  }
+}
+
+
+function drawAnimLegs(x, y, w, h, frame, shouldFlip) {
+  const strides = [
+    { lx:-5, lh:16, rx:3,  rh:11 },
+    { lx:-3, lh:13, rx:0,  rh:13 },
+    { lx:-1, lh:11, rx:-4, rh:16 },
+    { lx:-3, lh:13, rx:0,  rh:13 },
+  ];
+  const s = strides[frame % 4];
+  const cxL = x + w / 2;
+  const bot  = y + h;
+  const lw   = Math.max(4, w * 0.22);
+  ctx.save();
+  if (shouldFlip) { ctx.translate(cxL * 2, 0); ctx.scale(-1, 1); }
+  ctx.fillStyle = '#4a1010';
+  ctx.fillRect(cxL - lw*1.6 + s.lx, bot - s.lh - 1, lw, s.lh);
+  ctx.fillRect(cxL + lw*0.4 + s.rx, bot - s.rh - 1, lw, s.rh);
+  ctx.fillStyle = '#5a3010';
+  ctx.fillRect(cxL - lw*1.8 + s.lx, bot - 3, lw + 4, 3);
+  ctx.fillRect(cxL + lw*0.2 + s.rx, bot - 3, lw + 4, 3);
+  ctx.restore();
+}
+
+function drawIdleLook(x, y, w, h, look, shouldFlip) {
+  if (look === 0) return;
+  const dir = shouldFlip ? -look : look;
+  const eyeX = x + w * 0.5 + dir * w * 0.14;
+  const eyeY = y + h * 0.21;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(eyeX, eyeY, 2.8, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,210,120,0.75)';
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawHeroCanvas(ctx, x, y, w, h, jumping) {
+  const s = w / 28;
+  const frame = hero.runFrame || 0;
+  // Legs — alternate stride
+  ctx.fillStyle = '#5a1a1a';
+  if (jumping) {
+    ctx.fillRect(x+6*s,  y+28*s, 7*s, 10*s);
+    ctx.fillRect(x+15*s, y+22*s, 7*s, 10*s);
+  } else {
+    const legOffsets = [[0,4],[3,0],[4,0],[1,3]]; // [leftLeg, rightLeg] stride
+    const [ll, rl] = legOffsets[frame];
+    ctx.fillRect(x+6*s,  y+(28+ll)*s, 7*s, (14-ll)*s);
+    ctx.fillRect(x+15*s, y+(28+rl)*s, 7*s, (14-rl)*s);
+  }
+  // Shoes
+  ctx.fillStyle = '#5a3010';
+  ctx.fillRect(x+4*s, y+40*s, 10*s, 4*s);
+  ctx.fillRect(x+14*s, y+40*s, 10*s, 4*s);
+  // Body
+  ctx.fillStyle = '#e87000';
+  ctx.fillRect(x+4*s, y+18*s, 20*s, 14*s);
+  // Arms — swing when running
+  ctx.fillStyle = '#e87000';
+  const armSwing = jumping ? 0 : [-3, 3, 3, -3][frame] * s;
+  ctx.fillRect(x+0*s, y+(19+armSwing/s)*s, 5*s, 9*s);
+  ctx.fillRect(x+23*s, y+(19-armSwing/s)*s, 5*s, 9*s);
+  // Head
+  ctx.fillStyle = '#e87000';
+  ctx.beginPath();
+  ctx.ellipse(x+14*s, y+10*s, 10*s, 10*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Hair
+  ctx.fillStyle = '#5a2800';
+  ctx.fillRect(x+7*s, y+1*s, 14*s, 5*s);
+  // Eyes
+  ctx.fillStyle = '#ffe0c0';
+  ctx.beginPath();
+  ctx.ellipse(x+11*s, y+10*s, 4*s, 4*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = '#222';
+  ctx.beginPath();
+  ctx.arc(x+11*s, y+11*s, 2*s, 0, Math.PI*2);
+  ctx.fill();
+  // Nose
+  ctx.fillStyle = '#d05020';
+  ctx.beginPath();
+  ctx.ellipse(x+14*s, y+14*s, 3*s, 2*s, 0, 0, Math.PI*2);
+  ctx.fill();
+}
+
+// Draw zombie
+function drawZombie(x, y, w, h, dir, animT) {
+  const s = w / 26;
+  const bob = Math.sin(animT * 0.15) * 2;
+  // Legs (shuffling)
+  const legOff = Math.sin(animT * 0.2) * 5;
+  ctx.fillStyle = '#2d4a20';
+  ctx.fillRect(x+5*s, y+28*s+bob, 7*s, 14*s + (legOff > 0 ? legOff : 0));
+  ctx.fillRect(x+14*s, y+28*s+bob, 7*s, 14*s + (legOff < 0 ? -legOff : 0));
+  // Shoes
+  ctx.fillStyle = '#1a1a0a';
+  ctx.fillRect(x+3*s, y+42*s+bob, 11*s, 4*s);
+  ctx.fillRect(x+12*s, y+42*s+bob, 11*s, 4*s);
+  // Body
+  ctx.fillStyle = '#3a5a28';
+  ctx.fillRect(x+3*s, y+17*s+bob, 20*s, 13*s);
+  // Torn shirt details
+  ctx.fillStyle = '#2a3a18';
+  ctx.fillRect(x+3*s, y+27*s+bob, 20*s, 3*s);
+  // Arms (outstretched zombie style)
+  ctx.fillStyle = '#7a9a60';
+  if (dir > 0) {
+    ctx.fillRect(x+23*s, y+17*s+bob, 8*s, 5*s); // outstretched
+    ctx.fillRect(x-2*s, y+19*s+bob, 5*s, 5*s);
+  } else {
+    ctx.fillRect(x-6*s, y+17*s+bob, 8*s, 5*s); // outstretched
+    ctx.fillRect(x+23*s, y+19*s+bob, 5*s, 5*s);
+  }
+  // Head
+  ctx.fillStyle = '#7a9a60';
+  ctx.beginPath();
+  ctx.ellipse(x+13*s, y+9*s+bob, 10*s, 10*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Hair (matted)
+  ctx.fillStyle = '#1a1a0a';
+  ctx.fillRect(x+5*s, y+0*s+bob, 16*s, 4*s);
+  // Glowing eyes
+  const eyeGlow = (Math.sin(animT * 0.08) + 1) * 0.5;
+  ctx.fillStyle = `rgba(255, ${Math.floor(eyeGlow*100)}, 0, 1)`;
+  ctx.beginPath();
+  ctx.ellipse(x+10*s, y+9*s+bob, 3*s, 2.5*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x+17*s, y+9*s+bob, 3*s, 2.5*s, 0, 0, Math.PI*2);
+  ctx.fill();
+  // Pupils
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(x+10*s, y+9*s+bob, 1.5*s, 0, Math.PI*2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x+17*s, y+9*s+bob, 1.5*s, 0, Math.PI*2);
+  ctx.fill();
+  // Mouth (jagged)
+  ctx.fillStyle = '#8b0000';
+  ctx.fillRect(x+8*s, y+14*s+bob, 10*s, 3*s);
+  ctx.fillStyle = '#1a0a0a';
+  // Teeth
+  for (let t = 0; t < 3; t++) {
+    ctx.fillRect(x+(9+t*3)*s, y+14*s+bob, 2*s, 2*s);
+  }
+  // Wounds/marks
+  ctx.strokeStyle = '#8b0000';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x+6*s, y+7*s+bob);
+  ctx.lineTo(x+9*s, y+12*s+bob);
+  ctx.stroke();
+}
+
+// ─── PARTICLE SYSTEM ──────────────────────────────────────────────────────────
+function spawnParticles(x, y, color, count) {
+  for (let i = 0; i < count; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 6,
+      vy: (Math.random() - 1.5) * 5,
+      life: 1,
+      color,
+      size: Math.random() * 5 + 2
+    });
+  }
+}
+
+function updateParticles() {
+  particles = particles.filter(p => p.life > 0);
+  for (const p of particles) {
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.2;
+    p.life -= 0.04;
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ─── GAME INITIALIZATION ──────────────────────────────────────────────────────
+function initGame() {
+  score = 0;
+  lives = MAX_LIVES;
+  level = 1;
+  particles = [];
+  initLevel();
+}
+
+function initLevel() {
+  stunTimer = 0;
+  particles = particles || [];
+
+  // Create gaps FIRST so we can pick a safe spawn X for the hero
+  gaps = [];
+  for (let f = 0; f < FLOOR_COUNT; f++) {
+    const dir = (f % 2 === 0) ? 1 : -1;
+    const speed = 0.8 + level * 0.08;
+    gaps.push({
+      floor: f,
+      x: Math.random() * (W - GAP_W),
+      dir: dir,
+      speed: speed * (0.8 + Math.random() * 0.4),
+      open: true
+    });
+  }
+
+  // Add extra gaps based on level
+  const extraGaps = Math.min(level - 1, MAX_GAPS - FLOOR_COUNT);
+  for (let e = 0; e < extraGaps; e++) {
+    const f = Math.floor(Math.random() * FLOOR_COUNT);
+    gaps.push({
+      floor: f,
+      x: Math.random() * (W - GAP_W),
+      dir: Math.random() > 0.5 ? 1 : -1,
+      speed: (0.8 + level * 0.08) * (0.8 + Math.random() * 0.4),
+      open: true
+    });
+  }
+
+  // Hero starts on the solid GROUND (no gaps there, always safe)
+  const heroStartY = GROUND_Y - HERO_H;
+  hero = {
+    x: W / 2 - HERO_W / 2,
+    y: heroStartY, visualY: heroStartY,
+    vx: 0, vy: 0,
+    onGround: true, floor: -1,
+    facingLeft: false, jumping: false,
+    animT: 0, landAnim: 0, squashAnim: 0,
+    runFrame: 0, runTick: 0,
+    jumpAnim: 0, jumpAnimMax: 18, jumpStartY: 0, jumpTargetFloor: 0, jumpResult: 'up',
+    fallAnim: 0, fallAnimMax: 14, fallStartY: 0, fallTargetFloor: -1, fallTargetY: 0,
+    fallSourceFloor: 0,
+    wasOverGap: false,
+    groundHitAnim: 0   // plays fall1/fall2 on ground landing before losing a life
+  };
+
+  // Zombies
+  zombies = [];
+  const zombieCount = Math.min(level, 10);
+  for (let z = 0; z < zombieCount; z++) {
+    // Spread zombies evenly across floors 1-7 so they don't all start on same floor
+    const zFloor = 1 + (z % (FLOOR_COUNT - 1));
+    // Alternate between descending (dir=1, moves right, drops floor on wrap)
+    // and ascending (dir=-1, moves left, rises floor on wrap) — like Jumping Jack
+    const zDir = (z % 2 === 0) ? 1 : -1;
+    // floorDir: +1 = descending through floors over time, -1 = ascending
+    const floorDir = zDir === 1 ? -1 : 1;
+    zombies.push({
+      x: Math.random() * (W - 32),
+      floor: zFloor,
+      dir: zDir,           // horizontal walk direction
+      floorDir: floorDir,  // which direction to shift floors on screen wrap
+      speed: 0.6 + level * 0.05 + Math.random() * 0.3,
+      animT: Math.random() * 100,
+      w: 26, h: 42
+    });
+  }
+}
+
+
+// ─── GAME MECHANICS ───────────────────────────────────────────────────────────
+function isOverGap(floor, cx) {
+  return gaps.some(g => g.floor === floor && cx > g.x && cx < g.x + GAP_W);
+}
+
+function updateHero() {
+  // ── Stun timer ────────────────────────────────────────────────────────────
+  if (stunTimer > 0) stunTimer--;
+  const stunned = stunTimer > 0;
+
+  // ── Jump animation tick ───────────────────────────────────────────────────
+  // hero.jumpAnim: counts down from JUMP_FRAMES to 0
+  // During this time hero visually rises; at frame 0 we resolve where they land
+  if (hero.jumpAnim > 0) {
+    hero.jumpAnim--;
+    const t = 1 - hero.jumpAnim / hero.jumpAnimMax;
+    const arc = Math.sin(t * Math.PI);
+
+    if (hero.jumpResult === 'up') {
+      // Arc from jumpStartY up to target floor — exact floor spacing
+      hero.visualY = hero.jumpStartY - arc * FLOOR_SPACING;
+    } else {
+      // Bump: hero head just taps the underside of floor above — small nudge up then back
+      // Hero head is already at floor level, so just a small visual bump of ~10px
+      hero.visualY = hero.jumpStartY - arc * 10;
+    }
+
+    if (hero.jumpAnim === 0) {
+      // Animation done — resolve landing
+      if (hero.jumpResult === 'up') {
+        // Successfully jumped up — score and land
+        score        += 10 * level;
+        hero.floor    = hero.jumpTargetFloor;
+        hero.y        = floorStandY(hero.floor);
+        hero.visualY  = hero.y;
+        hero.onGround = true;
+        hero.jumping  = false;
+        hero.landAnim = 60;  // gap-fall protection
+        hero.squashAnim = 6; // short visual squash on landing
+        sounds.land();
+        addNewGap();
+        if (hero.floor === FLOOR_COUNT - 1) { score += 100 * level; levelUp(); }
+      } else {
+        // Bumped head — back to start floor
+        hero.y        = hero.jumpStartY;
+        hero.visualY  = hero.y;
+        hero.onGround = true;
+        hero.jumping  = false;
+        if (!stunned) { stunTimer = 60; }
+        spawnParticles(hero.x + HERO_W/2, floorTopY(hero.floor) + FLOOR_H, '#ffff00', 8);
+        sounds.bump();
+      }
+    }
+    // Horizontal movement still allowed during jump
+    if (hero.landAnim > 0) hero.landAnim--;
+    hero.x += hero.vx;
+    if (hero.x > W) hero.x = -HERO_W;
+    if (hero.x + HERO_W < 0) hero.x = W;
+    hero.animT++;
+    return;  // skip rest of update while animating
+  }
+
+  // ── Fall animation tick ───────────────────────────────────────────────────
+  if (hero.fallAnim > 0) {
+    hero.fallAnim--;
+    const t = 1 - hero.fallAnim / hero.fallAnimMax;
+    hero.visualY = hero.fallStartY + t * FLOOR_SPACING;
+
+    if (hero.fallAnim === 0) {
+      // Landed on floor below (or ground)
+      hero.y       = hero.fallTargetY;
+      hero.visualY = hero.y;
+      hero.onGround = true;
+      hero.jumping  = false;
+      hero.landAnim = 5;
+      hero.squashAnim = 6;
+      hero.wasOverGap = false;
+      if (hero.fallTargetFloor === -1) {
+        hero.floor = -1;
+        // Landing on ground: play anger animation before losing a life
+        hero.groundHitAnim = 180;  // 3 seconds = same as inter-floor stun (180 frames)
+        sounds.scream();
+        sounds.cry(180);
+        spawnParticles(hero.x + HERO_W/2, hero.y, '#ff4444', 12);
+      } else {
+        hero.floor = hero.fallTargetFloor;
+        if (stunTimer === 0) { stunTimer = 180; }
+        spawnParticles(hero.x + HERO_W/2, hero.y, '#ffff00', 10);
+      }
+    }
+    hero.x += hero.vx;
+    if (hero.x > W) hero.x = -HERO_W;
+    if (hero.x + HERO_W < 0) hero.x = W;
+    hero.animT++;
+    return;
+  }
+
+  // ── Ground hit animation (hero thumps floor in anger) ──────────────────────
+  if (hero.groundHitAnim > 0) {
+    hero.groundHitAnim--;
+    // Keep hero horizontal on the ground (visualY set to show lying sprite)
+    hero.visualY = hero.y;
+    if (hero.groundHitAnim === 0) {
+      // Animation over — now lose the life
+      loseLife();
+    }
+    // Spawn floor-thump particles on beat (~every 30 frames)
+    if (hero.groundHitAnim % 30 === 0) {
+      spawnParticles(hero.x + HERO_W*0.8, hero.y + HERO_H * 0.6, '#ff8800', 5);
+    }
+    hero.animT++;
+    return;
+  }
+
+  // ── Normal input ─────────────────────────────────────────────────────────
+  const leftHeld  = keys.left  || mobileLeft;
+  const rightHeld = keys.right || mobileRight;
+  const jumpHeld  = keys.jump  || mobileJump;
+  const jumpJustPressed = jumpHeld && !prevJump;
+  prevJump = jumpHeld;
+
+  if (!stunned) {
+    if      (leftHeld)  { hero.vx = -MOVE_SPEED; hero.facingLeft = true;  }
+    else if (rightHeld) { hero.vx =  MOVE_SPEED; hero.facingLeft = false; }
+    else                  hero.vx = 0;
+  } else {
+    hero.vx = 0;
+  }
+
+  hero.x += hero.vx;
+  if (hero.x > W) hero.x = -HERO_W;
+  if (hero.x + HERO_W < 0) hero.x = W;
+
+  const cx = hero.x + HERO_W / 2;
+
+  // ── JUMP: discrete check ──────────────────────────────────────────────────
+  if (jumpJustPressed && hero.onGround && !stunned) {
+    const targetFloor = (hero.floor === -1) ? 0 : hero.floor + 1;
+    if (targetFloor < FLOOR_COUNT) {
+      const gapPresent = isOverGap(targetFloor, cx);
+      hero.onGround    = false;
+      hero.jumping     = true;
+      hero.jumpAnim    = 18;         // 18 frames (~0.3s at 60fps)
+      hero.jumpAnimMax = 18;
+      hero.jumpStartY  = hero.y;
+      hero.jumpTargetFloor = targetFloor;
+      hero.jumpResult  = gapPresent ? 'up' : 'bump';
+      spawnParticles(cx, hero.y + HERO_H, '#aaffaa', 5);
+      sounds.jump();
+    }
+  }
+
+  if (hero.onGround && hero.floor >= 0 && hero.landAnim === 0) {
+    const overGapNow = isOverGap(hero.floor, cx);
+    if (overGapNow && !hero.wasOverGap) {
+      const sourceFloor = hero.floor;          // remember which floor we fell FROM
+      const targetFloor = hero.floor - 1;
+      hero.onGround    = false;
+      hero.jumping     = false;
+      hero.fallAnim    = 14;
+      hero.fallAnimMax = 14;
+      hero.fallStartY  = hero.y;
+      hero.fallSourceFloor = sourceFloor;
+      sounds.splat();      // used at landing to decide penalty
+      if (targetFloor < 0) {
+        hero.fallTargetFloor = -1;
+        hero.fallTargetY     = GROUND_Y - HERO_H;
+      } else {
+        hero.fallTargetFloor = targetFloor;
+        hero.fallTargetY     = floorStandY(targetFloor);
+      }
+    }
+    hero.wasOverGap = overGapNow;
+  } else {
+    hero.wasOverGap = false;
+  }
+
+  if (hero.landAnim > 0) hero.landAnim--;
+  hero.visualY = hero.y;
+  hero.animT++;
+}
+
+// Y position hero stands at when on a given floor
+function floorStandY(floor) {
+  return PLATFORM_Y[floor] - HERO_H;
+}
+function floorTopY(floor) {
+  return PLATFORM_Y[floor];
+}
+
+function addNewGap() {
+  if (gaps.length >= MAX_GAPS * 2) return;
+  const f = Math.floor(Math.random() * FLOOR_COUNT);
+  const newDir = Math.random() > 0.5 ? 1 : -1;
+  // First 3 new gaps descend (dir=-1 means moving left means going up per original)
+  gaps.push({
+    floor: f,
+    x: Math.random() * (W - GAP_W),
+    dir: newDir,
+    speed: (0.8 + level * 0.08) * (0.8 + Math.random() * 0.4),
+    open: true
+  });
+}
+
+function updateGaps() {
+  for (const g of gaps) {
+    g.x += g.dir * g.speed;
+    if (g.x > W) {
+      g.x = -GAP_W;
+      // Scrolled right off screen → move down one floor, wrap from bottom back to top
+      g.floor = g.floor > 0 ? g.floor - 1 : FLOOR_COUNT - 1;
+    }
+    if (g.x + GAP_W < 0) {
+      g.x = W;
+      // Scrolled left off screen → move up one floor, wrap from top back to bottom
+      g.floor = g.floor < FLOOR_COUNT - 1 ? g.floor + 1 : 0;
+    }
+  }
+}
+
+function updateZombies() {
+  for (const z of zombies) {
+    z.animT++;
+
+    // Walk horizontally
+    z.x += z.dir * z.speed;
+
+    // When zombie walks off the edge of the screen, shift to the next floor
+    // and re-enter from the opposite edge — exactly like Jumping Jack enemies
+    if (z.x > W) {
+      z.x = -z.w;
+      // Shift floor in floorDir, wrapping around
+      z.floor = z.floor + z.floorDir;
+      if (z.floor < 1)              z.floor = FLOOR_COUNT - 1;  // never go to ground floor
+      if (z.floor >= FLOOR_COUNT)   z.floor = 1;
+    }
+    if (z.x + z.w < 0) {
+      z.x = W;
+      z.floor = z.floor + z.floorDir;
+      if (z.floor < 1)              z.floor = FLOOR_COUNT - 1;
+      if (z.floor >= FLOOR_COUNT)   z.floor = 1;
+    }
+  }
+
+  // ── Collision with hero ──────────────────────────────────────────────────
+  if (stunTimer > 0) return;
+  for (const z of zombies) {
+    if (z.floor !== hero.floor) continue;
+    const dx = Math.abs((z.x + z.w / 2) - (hero.x + HERO_W / 2));
+    if (dx < (z.w + HERO_W) / 2 - 4) {
+      stunTimer = 180;
+      hero.justStunned = true;
+      spawnParticles(hero.x + HERO_W / 2, hero.y + HERO_H / 2, '#ff0000', 15);
+      sounds.zombie();
+      return;
+    }
+  }
+}
+
+function loseLife() {
+  lives--;
+  stunTimer = 0;
+  if (lives <= 0) {
+    state = 'dead';
+    deadTimer = 300; // 5 seconds at 60fps before player can press anything
+    sounds.die();
+    startSadMusic();
+    return;
+  }
+  sounds.scream(); // Scream on life lost (but not final death — die() handles that)
+  const ry = GROUND_Y - HERO_H;
+  hero.x = W / 2 - HERO_W / 2;
+  hero.y = ry; hero.visualY = ry;
+  hero.vy = 0; hero.vx = 0;
+  hero.floor = -1; hero.onGround = true; hero.jumping = false;
+  hero.jumpAnim = 0; hero.fallAnim = 0; hero.wasOverGap = false; hero.groundHitAnim = 0;
+}
+
+function levelUp() {
+  level++;
+  state = 'levelup';
+  sounds.levelUp();
+  levelTimer = 120;
+}
+
+// ─── DRAWING ──────────────────────────────────────────────────────────────────
+function drawBackground() {
+  // Dark foggy night sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#0a0010');
+  grad.addColorStop(0.5, '#110022');
+  grad.addColorStop(1, '#1a0505');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Moon
+  ctx.fillStyle = 'rgba(255,245,200,0.9)';
+  ctx.beginPath();
+  ctx.arc(380, 60, 35, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(180,170,100,0.4)';
+  ctx.beginPath();
+  ctx.arc(370, 55, 35, 0, Math.PI*2);
+  ctx.fill();
+
+  // Stars
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  const starPositions = [[40,30],[90,15],[150,40],[230,25],[290,10],[330,50],[410,20],[450,45],[60,70],[200,60]];
+  for (const [sx,sy] of starPositions) {
+    const blink = Math.sin(Date.now()/1000 + sx) * 0.3 + 0.7;
+    ctx.globalAlpha = blink * 0.7;
+    ctx.fillRect(sx, sy, 2, 2);
+  }
+  ctx.globalAlpha = 1;
+
+  // Distant city silhouette
+  ctx.fillStyle = '#0d0010';
+  const buildings = [[0,30,50,120],[55,20,40,130],[100,15,60,135],[165,25,35,125],[205,10,55,140],[265,20,40,130],[310,30,50,120],[365,15,45,135],[415,25,40,125],[460,20,30,130]];
+  for (const [bx,bh,bw,by] of buildings) {
+    ctx.fillRect(bx, H - by, bw, by);
+    // Windows
+    ctx.fillStyle = 'rgba(255,220,100,0.4)';
+    for (let wy = H-by+10; wy < H-20; wy += 15) {
+      for (let wx = bx+5; wx < bx+bw-5; wx += 12) {
+        if (Math.random() > 0.5 || (wy + wx) % 3 === 0)
+          ctx.fillRect(wx, wy, 5, 7);
+      }
+    }
+    ctx.fillStyle = '#0d0010';
+  }
+
+  // Fog effect at bottom
+  const fog = ctx.createLinearGradient(0, H-100, 0, H);
+  fog.addColorStop(0, 'rgba(20,5,5,0)');
+  fog.addColorStop(1, 'rgba(20,5,5,0.8)');
+  ctx.fillStyle = fog;
+  ctx.fillRect(0, H-100, W, 100);
+}
+
+function drawPlatforms() {
+  for (let f = 0; f < FLOOR_COUNT; f++) {
+    const py = PLATFORM_Y[f];
+    const floorGaps = gaps.filter(g => g.floor === f);
+
+    // Draw solid platform with gaps cut out
+    ctx.fillStyle = '#2a4a1a';
+    ctx.strokeStyle = '#4a8a2a';
+    ctx.lineWidth = 1;
+
+    // Find gap regions and draw platform around them
+    let solidRanges = [[0, W]];
+    for (const g of floorGaps) {
+      const newRanges = [];
+      for (const [start, end] of solidRanges) {
+        if (g.x > start && g.x < end) {
+          newRanges.push([start, g.x]);
+          if (g.x + GAP_W < end) {
+            newRanges.push([g.x + GAP_W, end]);
+          }
+        } else if (g.x <= start && g.x + GAP_W > start) {
+          if (g.x + GAP_W < end) {
+            newRanges.push([g.x + GAP_W, end]);
+          }
+        } else {
+          newRanges.push([start, end]);
+        }
+      }
+      solidRanges = newRanges;
+    }
+
+    for (const [start, end] of solidRanges) {
+      ctx.fillRect(start, py, end - start, FLOOR_H);
+      ctx.strokeRect(start, py, end - start, FLOOR_H);
+      // Platform detail lines
+      ctx.strokeStyle = 'rgba(100,200,50,0.3)';
+      ctx.beginPath();
+      ctx.moveTo(start, py + 4);
+      ctx.lineTo(end, py + 4);
+      ctx.stroke();
+      ctx.strokeStyle = '#4a8a2a';
+    }
+
+    // Gap highlight (dark void)
+    for (const g of floorGaps) {
+      const gx = Math.max(0, g.x);
+      const gw = Math.min(W, g.x + GAP_W) - gx;
+      if (gw > 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillRect(gx, py, gw, FLOOR_H);
+        // Danger glow on gaps
+        const gGrad = ctx.createLinearGradient(gx, py, gx, py + FLOOR_H);
+        gGrad.addColorStop(0, 'rgba(150,0,0,0.3)');
+        gGrad.addColorStop(1, 'rgba(100,0,0,0)');
+        ctx.fillStyle = gGrad;
+        ctx.fillRect(gx, py, gw, FLOOR_H);
+      }
+    }
+  }
+
+  // Solid ground platform — brown, no gaps
+  ctx.fillStyle = '#6b3a1f';
+  ctx.strokeStyle = '#8b5a2b';
+  ctx.lineWidth = 1;
+  ctx.fillRect(0, GROUND_Y, W, FLOOR_H);
+  ctx.strokeRect(0, GROUND_Y, W, FLOOR_H);
+  // Ground strip below
+  ctx.fillStyle = '#1a0505';
+  ctx.fillRect(0, GROUND_Y + FLOOR_H, W, H - (GROUND_Y + FLOOR_H));
+  ctx.fillStyle = '#2a0808';
+  ctx.fillRect(0, GROUND_Y + FLOOR_H, W, 4);
+}
+
+function drawHUD() {
+  // HUD background
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, 32);
+
+  // Score
+  ctx.fillStyle = '#00ff88';
+  ctx.font = 'bold 14px "Courier New"';
+  ctx.fillText('SCORE: ' + score, 8, 20);
+
+  // Level
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillText('LEVEL: ' + level, W/2 - 40, 20);
+
+  // Lives (zombie skulls)
+  ctx.fillStyle = '#ff4444';
+  ctx.fillText('LIVES: ', W - 120, 20);
+  for (let i = 0; i < lives; i++) {
+    ctx.fillStyle = '#ff4444';
+    ctx.font = '16px sans-serif';
+    ctx.fillText('♥', W - 60 + i * 18, 21);
+  }
+
+  // Objective arrow (pointing up to top)
+  if (stunTimer === 0) {
+    ctx.fillStyle = 'rgba(0,255,100,0.6)';
+    ctx.font = '20px sans-serif';
+    ctx.fillText('▲', W/2 - 8, 28);
+  }
+}
+
+function drawZombies() {
+  for (const z of zombies) {
+    const zy = PLATFORM_Y[z.floor] - z.h;
+    ctx.save();
+    if (z.dir < 0) {
+      ctx.translate(z.x + z.w, zy);
+      ctx.scale(-1, 1);
+      drawZombie(0, 0, z.w, z.h, 1, z.animT);
+    } else {
+      drawZombie(z.x, zy, z.w, z.h, z.dir, z.animT);
+    }
+    ctx.restore();
+  }
+}
+
+// ─── SPLASH SCREEN ────────────────────────────────────────────────────────────
+function drawSplash() {
+  // Animated background
+  const now = Date.now() / 1000;
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#050010');
+  grad.addColorStop(0.6, '#100020');
+  grad.addColorStop(1, '#200505');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Animated zombie horde silhouettes at bottom
+  ctx.fillStyle = 'rgba(80,0,0,0.5)';
+  for (let i = 0; i < 8; i++) {
+    const zx = ((i * 65 + now * 20) % (W + 60)) - 30;
+    const zy = H - 70 - Math.abs(Math.sin(now * 0.8 + i)) * 8;
+    drawZombie(zx, zy - 40, 26, 42, 1, now * 60 + i * 30);
+  }
+
+  // Fog
+  const fog = ctx.createLinearGradient(0, H - 120, 0, H);
+  fog.addColorStop(0, 'rgba(0,0,0,0)');
+  fog.addColorStop(1, 'rgba(0,0,0,0.9)');
+  ctx.fillStyle = fog;
+  ctx.fillRect(0, H - 120, W, 120);
+
+  // Moon
+  ctx.fillStyle = 'rgba(255,240,180,0.9)';
+  ctx.beginPath();
+  ctx.arc(W - 80, 70, 40, 0, Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(150,130,80,0.5)';
+  ctx.beginPath();
+  ctx.arc(W - 95, 62, 40, 0, Math.PI*2);
+  ctx.fill();
+
+  // "2eProduction presents" header — styled like the uploaded Front.jpg reference
+  ctx.save();
+  // Outer glow for the whole header
+  ctx.shadowColor = '#ff8800';
+  ctx.shadowBlur = 8 + Math.sin(now * 1.5) * 3;
+  ctx.textAlign = 'center';
+
+  // "2eProduction" — bold, golden gradient effect
+  ctx.font = 'bold 28px "Courier New"';
+  const gradProd = ctx.createLinearGradient(W/2 - 120, 38, W/2 + 120, 58);
+  gradProd.addColorStop(0,   '#ff9900');
+  gradProd.addColorStop(0.4, '#ffdd00');
+  gradProd.addColorStop(0.7, '#ffaa00');
+  gradProd.addColorStop(1,   '#cc6600');
+  ctx.fillStyle = gradProd;
+  ctx.fillText('2eProduction', W/2, 48);
+
+  // "presents" — smaller, italic-style, lighter colour
+  ctx.font = '15px "Courier New"';
+  ctx.fillStyle = '#ddaa55';
+  ctx.shadowBlur = 4;
+  ctx.fillText('p r e s e n t s', W/2, 66);
+  ctx.restore();
+
+  // Title
+  ctx.save();
+  ctx.shadowColor = '#ff0000';
+  ctx.shadowBlur = 20 + Math.sin(now * 2) * 8;
+  ctx.fillStyle = '#ff2020';
+  ctx.font = 'bold 50px "Courier New"';
+  ctx.textAlign = 'center';
+  ctx.fillText('ZOMBIE', W/2, 108);
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 58px "Courier New"';
+  ctx.shadowColor = '#ffcc00';
+  ctx.fillText('JUMP!', W/2, 166);
+  ctx.restore();
+
+  // Hero image on splash
+  if (heroSplashImg && heroSplashImg.complete) {
+    ctx.save();
+    ctx.shadowColor = '#00ff88';
+    ctx.shadowBlur = 15;
+    ctx.drawImage(heroSplashImg, W/2 - 55, 178, 110, 165);
+    ctx.restore();
+  }
+
+  // Instructions box — draw fill first, then only the bottom/side border (no top line through text)
+  const boxX = 20, boxY = 355, boxW = W - 40, boxH = 220;
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  roundRect(ctx, boxX, boxY, boxW, boxH, 10);
+  ctx.fill();
+  // Draw border without a top edge (avoids the green line across the title)
+  ctx.strokeStyle = '#33cc33';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(boxX + 10, boxY);               // top-left corner
+  ctx.lineTo(boxX + boxW - 10, boxY);        // top-right corner
+  ctx.stroke();
+  // Side + bottom border separately (full rounded sides and bottom)
+  ctx.beginPath();
+  ctx.moveTo(boxX + 10, boxY + 1);
+  ctx.lineTo(boxX, boxY + 10);
+  ctx.lineTo(boxX, boxY + boxH - 10);
+  ctx.quadraticCurveTo(boxX, boxY + boxH, boxX + 10, boxY + boxH);
+  ctx.lineTo(boxX + boxW - 10, boxY + boxH);
+  ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW, boxY + boxH - 10);
+  ctx.lineTo(boxX + boxW, boxY + 10);
+  ctx.lineTo(boxX + boxW - 10, boxY + 1);
+  ctx.stroke();
+
+  ctx.fillStyle = '#00ff88';
+  ctx.font = 'bold 13px "Courier New"';
+  ctx.textAlign = 'center';
+  ctx.fillText('HOW TO ESCAPE THE ZOMBIE HORDE:', W/2, 376);
+
+  ctx.fillStyle = '#ccffcc';
+  ctx.font = '11px "Courier New"';
+  const instructions = [
+    '← → Arrow Keys / Buttons  =  Move Left / Right',
+    'SPACE / Jump Button  =  Jump',
+    '',
+    'Time your jump UP through a GAP to reach',
+    'the next floor. Reach the top to escape!',
+    '',
+    '⚠  Walk over a gap = fall down + stunned',
+    '⚠  Fall to the GROUND = lose a life!',
+    '⚠  Touch a Zombie = stunned (watch gaps!)',
+    '⚠  Mis-timed jump = bounce off ceiling',
+    '',
+    '♥ ♥ ♥  You have 3 lives — good luck!',
+  ];
+  let iy = 395;
+  for (const line of instructions) {
+    if (line === '') { iy += 5; continue; }
+    ctx.fillText(line, W/2, iy);
+    iy += 16;
+  }
+
+  // Start splash music if not running
+  startSplashMusic();
+
+  // Flashing "press any key"
+  flashTimer++;
+  if (flashTimer > 35) { flashOn = !flashOn; flashTimer = 0; }
+  if (flashOn) {
+    ctx.fillStyle = '#ffff00';
+    ctx.font = 'bold 16px "Courier New"';
+    ctx.shadowColor = '#ffff00';
+    ctx.shadowBlur = 10;
+    ctx.fillText('— PRESS ANY KEY TO START —', W/2, H - 20);
+    ctx.shadowBlur = 0;
+  }
+  ctx.textAlign = 'left';
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y);
+  ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r);
+  ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h);
+  ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r);
+  ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+// ─── GAME OVER / WIN SCREENS ──────────────────────────────────────────────────
+function drawGameOver() {
+  const now = Date.now() / 1000;
+  // Red pulsing bg
+  const pulse = (Math.sin(now * 3) + 1) * 0.5;
+  ctx.fillStyle = `rgb(${Math.floor(20 + pulse*30)},0,0)`;
+  ctx.fillRect(0, 0, W, H);
+
+  // Zombie horde closing in
+  for (let i = 0; i < 6; i++) {
+    const zx = i * 75 + Math.sin(now + i) * 10;
+    drawZombie(zx, H/2 + 40, 36, 58, 1, now * 60 + i * 20);
+  }
+
+  // Hero being grabbed - use image in center
+  if (heroImg && heroImg.complete) {
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    // Tint red
+    ctx.drawImage(heroImg, W/2 - 30, H/2 - 70, 60, 90);
+    ctx.fillStyle = 'rgba(200,0,0,0.35)';
+    ctx.fillRect(W/2 - 30, H/2 - 70, 60, 90);
+    ctx.restore();
+  }
+
+  // Splatter particles
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = `rgba(200,0,0,${0.5 + Math.sin(now*2+i)*0.3})`;
+    const sx = W/2 + Math.cos(now*0.5+i*0.8) * (40 + i*8);
+    const sy = H/2 + Math.sin(now*0.7+i*0.9) * (30 + i*5);
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4 + i*1.5, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff0000';
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = '#ff0000';
+  ctx.font = 'bold 48px "Courier New"';
+  ctx.fillText('BRAAAINS...', W/2, 80);
+  ctx.fillStyle = '#ff6666';
+  ctx.font = 'bold 28px "Courier New"';
+  ctx.fillText("YOU'VE BEEN", W/2, 140);
+  ctx.fillText('ZOMBIE-FIED!', W/2, 175);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, 80, 210, W-160, 80, 10);
+  ctx.fill();
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 16px "Courier New"';
+  ctx.fillText('FINAL SCORE: ' + score, W/2, 248);
+  ctx.fillStyle = '#ffaa00';
+  ctx.font = '14px "Courier New"';
+  ctx.fillText('Reached level ' + level + ' of ' + MAX_LEVELS, W/2, 272);
+
+  // Try again button
+  if (deadTimer <= 0) {
+    flashTimer++;
+    if (flashTimer > 40) { flashOn = !flashOn; flashTimer = 0; }
+    if (flashOn) {
+      ctx.fillStyle = '#ffff00';
+      ctx.font = 'bold 18px "Courier New"';
+      ctx.shadowColor = '#ffff00';
+      ctx.shadowBlur = 10;
+      ctx.fillText('PRESS ANY KEY TO TRY AGAIN', W/2, H - 40);
+      ctx.shadowBlur = 0;
+    }
+  } else {
+    // Show countdown hint
+    const secs = Math.ceil(deadTimer / 60);
+    ctx.fillStyle = 'rgba(255,100,100,0.7)';
+    ctx.font = '14px "Courier New"';
+    ctx.fillText(`The zombies feast for ${secs}s...`, W/2, H - 40);
+  }
+  ctx.restore();
+}
+
+function drawWin() {
+  const now = Date.now() / 1000;
+  // Bright sunrise
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#001040');
+  grad.addColorStop(0.4, '#102060');
+  grad.addColorStop(0.7, '#803010');
+  grad.addColorStop(1, '#ff6020');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Sun rising
+  ctx.save();
+  ctx.shadowColor = '#ffcc00';
+  ctx.shadowBlur = 50;
+  ctx.fillStyle = '#ffee80';
+  ctx.beginPath();
+  ctx.arc(W/2, H - 30 - Math.sin(now * 0.3) * 20, 50, 0, Math.PI*2);
+  ctx.fill();
+  ctx.restore();
+
+  // Helicopter escape
+  const hx = (now * 60) % (W + 200) - 100;
+  ctx.save();
+  ctx.fillStyle = '#888';
+  ctx.fillRect(hx, 100, 80, 20);
+  ctx.fillRect(hx + 30, 85, 10, 15);
+  ctx.fillStyle = 'rgba(200,200,200,0.5)';
+  // Rotor
+  const rotorAngle = now * 10;
+  ctx.save();
+  ctx.translate(hx + 35, 84);
+  ctx.rotate(rotorAngle);
+  ctx.fillRect(-35, -3, 70, 6);
+  ctx.restore();
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('RESCUE', hx + 5, 116);
+  ctx.restore();
+
+  // Hero escaping - jumping with arms up
+  if (heroSplashImg && heroSplashImg.complete) {
+    ctx.save();
+    ctx.shadowColor = '#ffff88';
+    ctx.shadowBlur = 20;
+    const hy = 200 + Math.sin(now * 2) * 15;
+    ctx.drawImage(heroSplashImg, W/2 - 55, hy, 110, 165);
+    ctx.restore();
+  }
+
+  // Zombie horde retreating (moving away)
+  ctx.globalAlpha = 0.4;
+  for (let i = 0; i < 5; i++) {
+    const zx = W - (i * 70 + now * 30) % (W + 200);
+    drawZombie(zx, H - 90, 26, 42, -1, now * 40 + i * 20);
+  }
+  ctx.globalAlpha = 1;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ffff00';
+  ctx.shadowBlur = 25;
+  ctx.fillStyle = '#ffff00';
+  ctx.font = 'bold 42px "Courier New"';
+  ctx.fillText('ESCAPED!', W/2, 80);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 20px "Courier New"';
+  ctx.shadowColor = '#ffffff';
+  ctx.shadowBlur = 10;
+  ctx.fillText('YOU SURVIVED THE', W/2, 115);
+  ctx.fillText('ZOMBIE INVASION!', W/2, 145);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, 60, 390, W-120, 110, 12);
+  ctx.fill();
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 18px "Courier New"';
+  ctx.fillText('FINAL SCORE', W/2, 420);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 32px "Courier New"';
+  ctx.fillText(score.toString(), W/2, 460);
+  ctx.fillStyle = '#aaffaa';
+  ctx.font = '14px "Courier New"';
+  ctx.fillText('All ' + MAX_LEVELS + ' levels cleared!', W/2, 488);
+
+  flashTimer++;
+  if (flashTimer > 40) { flashOn = !flashOn; flashTimer = 0; }
+  if (flashOn) {
+    ctx.fillStyle = '#ffff00';
+    ctx.font = 'bold 16px "Courier New"';
+    ctx.shadowColor = '#ffff00';
+    ctx.shadowBlur = 10;
+    ctx.fillText('PRESS ANY KEY TO PLAY AGAIN', W/2, H - 25);
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+
+function drawLevelUp() {
+  // Semi-transparent overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#00ff88';
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = '#00ff88';
+  ctx.font = 'bold 36px "Courier New"';
+  ctx.fillText('FLOOR CLEARED!', W/2, H/2 - 40);
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 20px "Courier New"';
+  ctx.fillText('Entering Level ' + level, W/2, H/2);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '14px "Courier New"';
+  ctx.fillText('Score: ' + score, W/2, H/2 + 35);
+
+  if (level <= MAX_LEVELS) {
+    const zombieWarning = Math.min(level, 10) + ' zombie' + (level > 1 ? 's' : '') + ' on next floor!';
+    ctx.fillStyle = '#ff6666';
+    ctx.fillText(zombieWarning, W/2, H/2 + 60);
+  }
+  ctx.restore();
+}
+
+// ─── GAME LOOP ────────────────────────────────────────────────────────────────
+function gameLoop() {
+  requestAnimationFrame(gameLoop);
+  ctx.clearRect(0, 0, W, H);
+
+  if (inputLockout > 0) inputLockout--;
+  if (deadTimer > 0) deadTimer--;
+  if (state === 'splash') {
+    drawSplash();
+    return;
+  }
+  if (state === 'dead') {
+    drawGameOver();
+    return;
+  }
+  if (state === 'win') {
+    drawWin();
+    return;
+  }
+
+  // Draw game world
+  drawBackground();
+  drawPlatforms();
+  drawZombies();
+
+  // Draw hero
+  if (hero) {
+    drawHeroSprite(hero.x, hero.visualY, HERO_W, HERO_H, hero.facingLeft, stunTimer > 0, hero.jumping);
+
+    // "Life Lost!" flash when doing ground-hit animation
+    if (hero.groundHitAnim > 0) {
+      const flashPhase = Math.floor(hero.groundHitAnim / 8) % 2; // fast flash
+      if (flashPhase === 0) {
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.font = 'bold 36px "Courier New"';
+        ctx.shadowColor = '#ff0000';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle = '#ff2222';
+        ctx.fillText('LIFE LOST!', W/2, H/2 - 20);
+        // Remaining lives sub-text
+        const livesLeft = lives - 1; // will lose one when anim ends
+        ctx.font = '16px "Courier New"';
+        ctx.fillStyle = '#ffaaaa';
+        ctx.shadowBlur = 8;
+        ctx.fillText(livesLeft > 0 ? `${livesLeft} ${livesLeft === 1 ? 'life' : 'lives'} remaining` : 'GAME OVER!', W/2, H/2 + 15);
+        ctx.restore();
+      }
+    }
+  }
+
+  updateParticles();
+  drawHUD();
+
+  if (state === 'levelup') {
+    drawLevelUp();
+    levelTimer--;
+    if (levelTimer <= 0) {
+      if (level > MAX_LEVELS) {
+        state = 'win';
+      } else {
+        state = 'playing';
+        initLevel();
+      }
+    }
+    return;
+  }
+
+  if (state === 'playing') {
+    updateHero();
+    updateGaps();
+    updateZombies();
+  }
+}
+
+// ─── INPUT HANDLING ───────────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (inputLockout > 0) return;
+  if (state === 'splash') { stopSplashMusic(); state = 'playing'; initGame(); return; }
+  if (state === 'dead') { if (deadTimer > 0) return; stopSadMusic(); state = 'splash'; inputLockout = 120; startSplashMusic(); return; }
+  if (state === 'win') { state = 'splash'; inputLockout = 120; return; }
+  if (e.key === 'ArrowLeft') keys.left = true;
+  if (e.key === 'ArrowRight') keys.right = true;
+  if (e.key === ' ' || e.key === 'ArrowUp') { keys.jump = true; e.preventDefault(); }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.key === 'ArrowLeft') keys.left = false;
+  if (e.key === 'ArrowRight') keys.right = false;
+  if (e.key === ' ' || e.key === 'ArrowUp') keys.jump = false;
+});
+
+// Mobile controls
+function setupMobileBtn(id, setActive) {
+  const btn = document.getElementById(id);
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); setActive(true);
+    if (inputLockout > 0) return;
+    if (state === 'splash') { state = 'playing'; initGame(); }
+    else if (state === 'dead') { if (deadTimer > 0) return; state = 'splash'; inputLockout = 120; }
+    else if (state === 'win') { state = 'splash'; }
+  }, {passive:false});
+  btn.addEventListener('touchend', (e) => { e.preventDefault(); setActive(false); }, {passive:false});
+  btn.addEventListener('mousedown', () => { setActive(true);
+    if (state === 'splash') { state = 'playing'; initGame(); }
+    else if (state === 'dead') { state = 'splash'; }
+    else if (state === 'win') { state = 'splash'; }
+  });
+  btn.addEventListener('mouseup', () => setActive(false));
+  btn.addEventListener('mouseleave', () => setActive(false));
+}
+
+setupMobileBtn('btnLeft', (v) => mobileLeft = v);
+setupMobileBtn('btnRight', (v) => mobileRight = v);
+setupMobileBtn('btnJump', (v) => mobileJump = v);
+
+// ─── LOAD IMAGES ──────────────────────────────────────────────────────────────
+heroImg = new Image();
+heroImg.src = './zombie_jump_images/hero_small.png';
+heroImg.onload = () => imagesLoaded++;
+
+heroRunImg = new Image();
+heroRunImg.src = './zombie_jump_images/hero_run.png';
+heroRunImg.onload = () => imagesLoaded++;
+
+heroRun2Img = new Image();
+heroRun2Img.src = './zombie_jump_images/hero_run2.png';
+heroRun2Img.onload = () => imagesLoaded++;
+
+heroJump1Img = new Image();
+heroJump1Img.src = './zombie_jump_images/hero_jump1.png';
+heroJump1Img.onload = () => imagesLoaded++;
+
+heroJump2Img = new Image();
+heroJump2Img.src = './zombie_jump_images/hero_jump2.png';
+heroJump2Img.onload = () => imagesLoaded++;
+
+fall1Img = new Image();
+fall1Img.src = './zombie_jump_images/fall1.png';
+fall1Img.onload = () => imagesLoaded++;
+
+fall2Img = new Image();
+fall2Img.src = './zombie_jump_images/fall2.png';
+fall2Img.onload = () => imagesLoaded++;
+
+heroSplashImg = new Image();
+heroSplashImg.src = './zombie_jump_images/hero_splash.png';
+heroSplashImg.onload = () => imagesLoaded++;
+
+// Resize canvas for mobile (keep game area, add button space)
+function resizeCanvas() {
+  const isMobile = window.innerWidth <= 600 || (window.matchMedia('(hover: none) and (pointer: coarse)').matches);
+  const container = document.getElementById('gameContainer');
+  if (isMobile) {
+    container.style.width = Math.min(window.innerWidth, 480) + 'px';
+    canvas.height = 560;
+    // Adjust platform positions for shorter canvas
+    // (already uses H constant, so this is handled)
+  }
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ─── START ────────────────────────────────────────────────────────────────────
+particles = [];
+gameLoop();
+</script>
+</body>
+</html>
