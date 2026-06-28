@@ -26,51 +26,37 @@
     image-rendering: pixelated;
     image-rendering: crisp-edges;
   }
-  #mobileControls {
-    display: none;
+  /* Tap zones — invisible overlays on the canvas for touch/click control.
+     Left third = move left, right third = move right, middle third = jump.
+     Always present but only capture touch/pointer events, never block view. */
+  #tapLeft, #tapRight, #tapJump {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    height: 80px;
-    background: rgba(0,0,0,0.7);
-    justify-content: space-around;
-    align-items: center;
+    top: 0;
+    height: 100%;
     z-index: 10;
-  }
-  .ctrl-btn {
-    width: 70px;
-    height: 60px;
-    background: rgba(80,200,80,0.3);
-    border: 2px solid #4c4;
-    border-radius: 10px;
-    color: #4c4;
-    font-size: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    user-select: none;
+    /* Completely transparent — no visual at all */
+    background: transparent;
     -webkit-tap-highlight-color: transparent;
-    transition: background 0.1s;
+    user-select: none;
+    cursor: pointer;
   }
-  .ctrl-btn:active { background: rgba(80,200,80,0.6); }
-  @media (max-width: 600px) {
-    #mobileControls { display: flex; }
-  }
-  @media (hover: none) and (pointer: coarse) {
-    #mobileControls { display: flex; }
-  }
+  #tapLeft  { left: 0;         width: 33%; }
+  #tapJump  { left: 33%;       width: 34%; }
+  #tapRight { right: 0;        width: 33%; }
+
+  /* Optional: very subtle hint glow on active press so player gets feedback */
+  #tapLeft.active  { background: rgba(100,255,100,0.06); }
+  #tapRight.active { background: rgba(100,255,100,0.06); }
+  #tapJump.active  { background: rgba(255,255,100,0.06); }
 </style>
 </head>
 <body>
 <div id="gameContainer">
   <canvas id="gameCanvas" width="480" height="640"></canvas>
-  <div id="mobileControls">
-    <div class="ctrl-btn" id="btnLeft">&#8592;</div>
-    <div class="ctrl-btn" id="btnJump">&#11014;</div>
-    <div class="ctrl-btn" id="btnRight">&#8594;</div>
-  </div>
+  <!-- Invisible tap zones: left=move left, centre=jump, right=move right -->
+  <div id="tapLeft"></div>
+  <div id="tapJump"></div>
+  <div id="tapRight"></div>
 </div>
 
 <script>
@@ -1695,27 +1681,40 @@ document.addEventListener('keyup', (e) => {
 });
 
 // Mobile controls
-function setupMobileBtn(id, setActive) {
-  const btn = document.getElementById(id);
-  btn.addEventListener('touchstart', (e) => { e.preventDefault(); setActive(true);
+// ─── TAP ZONE CONTROLS ────────────────────────────────────────────────────────
+// Three invisible zones over the canvas: left / centre / right
+// Work on touch AND mouse click, alongside existing keyboard controls.
+function setupTapZone(id, onStart, onEnd) {
+  const el = document.getElementById(id);
+
+  function start(e) {
+    e.preventDefault();
+    el.classList.add('active');
+    onStart();
+    // Advance game state on any tap
     if (inputLockout > 0) return;
-    if (state === 'splash') { state = 'playing'; initGame(); }
-    else if (state === 'dead') { if (deadTimer > 0) return; state = 'splash'; inputLockout = 120; }
-    else if (state === 'win') { state = 'splash'; }
-  }, {passive:false});
-  btn.addEventListener('touchend', (e) => { e.preventDefault(); setActive(false); }, {passive:false});
-  btn.addEventListener('mousedown', () => { setActive(true);
-    if (state === 'splash') { state = 'playing'; initGame(); }
-    else if (state === 'dead') { state = 'splash'; }
-    else if (state === 'win') { state = 'splash'; }
-  });
-  btn.addEventListener('mouseup', () => setActive(false));
-  btn.addEventListener('mouseleave', () => setActive(false));
+    if (state === 'splash') { stopSplashMusic(); state = 'playing'; initGame(); }
+    else if (state === 'dead') { if (deadTimer > 0) return; stopSadMusic(); state = 'splash'; inputLockout = 120; startSplashMusic(); }
+    else if (state === 'win')  { state = 'splash'; inputLockout = 120; startSplashMusic(); }
+  }
+  function end(e) {
+    e.preventDefault();
+    el.classList.remove('active');
+    onEnd();
+  }
+
+  el.addEventListener('touchstart',  start, { passive: false });
+  el.addEventListener('touchend',    end,   { passive: false });
+  el.addEventListener('touchcancel', end,   { passive: false });
+  el.addEventListener('mousedown',   start);
+  el.addEventListener('mouseup',     end);
+  el.addEventListener('mouseleave',  end);
 }
 
-setupMobileBtn('btnLeft', (v) => mobileLeft = v);
-setupMobileBtn('btnRight', (v) => mobileRight = v);
-setupMobileBtn('btnJump', (v) => mobileJump = v);
+setupTapZone('tapLeft',  () => mobileLeft  = true,  () => mobileLeft  = false);
+setupTapZone('tapRight', () => mobileRight = true,  () => mobileRight = false);
+setupTapZone('tapJump',  () => mobileJump  = true,  () => mobileJump  = false);
+
 
 // ─── LOAD IMAGES ──────────────────────────────────────────────────────────────
 heroImg = new Image();
