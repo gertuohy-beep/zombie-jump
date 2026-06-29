@@ -10,19 +10,23 @@
     background: #000;
     display: flex;
     justify-content: center;
-    align-items: center;
-    height: 100vh;
-    overflow: hidden;
+    align-items: flex-start;  /* sit at top, not vertically centred */
+    min-height: 100vh;
+    overflow-x: hidden;
     font-family: 'Courier New', monospace;
   }
   #gameContainer {
     position: relative;
     width: 480px;
     max-width: 100vw;
+    /* Ensure the container is exactly the canvas height — no extra space */
+    height: 640px;
+    flex-shrink: 0;
   }
   canvas {
     display: block;
     width: 100%;
+    height: 100%;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
   }
