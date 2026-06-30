@@ -502,7 +502,16 @@ function drawHeroSprite(x, y, w, h, facingLeft, stunned, jumping) {
     ctx.translate(cx, cy);
     if ((hero.squashAnim || 0) > 0) { const sq = hero.squashAnim / 6; ctx.scale(1 + sq * 0.15, 1 - sq * 0.12); }
     if (idleFlip) ctx.scale(-1, 1);
-    ctx.drawImage(idleSrc, -w/2, -h, w, h);
+    // Guard: only draw if the chosen image has actually finished loading.
+    // This prevents a thrown error (and a frozen game loop) if hero_flip.png
+    // is missing, mis-named, or still loading.
+    if (idleSrc && idleSrc.complete && idleSrc.naturalWidth > 0) {
+      ctx.drawImage(idleSrc, -w/2, -h, w, h);
+    } else if (heroImg && heroImg.complete && heroImg.naturalWidth > 0) {
+      ctx.drawImage(heroImg, -w/2, -h, w, h);
+    } else {
+      drawHeroCanvas(ctx, -w/2, -h, w, h, false);
+    }
     ctx.restore();
   }
 
@@ -1641,7 +1650,19 @@ function gameLoop() {
 
   // Draw hero
   if (hero) {
-    drawHeroSprite(hero.x, hero.visualY, HERO_W, HERO_H, hero.facingLeft, stunTimer > 0, hero.jumping);
+    try {
+      drawHeroSprite(hero.x, hero.visualY, HERO_W, HERO_H, hero.facingLeft, stunTimer > 0, hero.jumping);
+    } catch (err) {
+      // Never let a drawing error (e.g. an image that failed to load) freeze
+      // the entire game loop — log it once and fall back to a simple box
+      // so the player can still see roughly where the hero is.
+      if (!window._heroDrawErrorLogged) {
+        console.error('Hero draw error (using fallback):', err);
+        window._heroDrawErrorLogged = true;
+      }
+      ctx.fillStyle = '#e87000';
+      ctx.fillRect(hero.x, hero.visualY, HERO_W, HERO_H);
+    }
 
     // "Life Lost!" flash when doing ground-hit animation
     if (hero.groundHitAnim > 0) {
