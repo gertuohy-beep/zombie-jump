@@ -332,7 +332,7 @@ let deadTimer = 0; // frames to show dead screen before accepting input
 let score = 0, lives = MAX_LIVES, level = 1;
 let hero, gaps, zombies, particles;
 let stunTimer = 0, levelTimer = 0;
-let heroImg, heroRunImg, heroRun2Img, heroJump1Img, heroJump2Img, heroSplashImg, fall1Img, fall2Img, imagesLoaded = 0;
+let heroImg, heroFlipImg, heroRunImg, heroRun2Img, heroJump1Img, heroJump2Img, heroSplashImg, fall1Img, fall2Img, imagesLoaded = 0;
 let flashTimer = 0, flashOn = true;
 let animFrame = 0, animTick = 0;
 let keys = {left:false, right:false, jump:false};
@@ -366,14 +366,14 @@ function drawHeroSprite(x, y, w, h, facingLeft, stunned, jumping) {
     hero.runTick = 0; hero.runFrame = 0;
   }
 
-  // ── Idle head-look: look left/right anxiously ──────────────────────────────
+  // ── Idle head-look: swap to heroFlipImg to simulate looking left/right ─────
   if (state === 'idle') {
     hero.idleTick = (hero.idleTick || 0) + 1;
     const cycle = hero.idleTick % 170;
-    if      (cycle < 60)  hero.idleLook = 0;
-    else if (cycle < 100) hero.idleLook = 1;
-    else if (cycle < 130) hero.idleLook = 0;
-    else                  hero.idleLook = -1;
+    if      (cycle < 60)  hero.idleLook = 0;   // looking forward (normal sprite)
+    else if (cycle < 100) hero.idleLook = 1;   // look right (flip sprite)
+    else if (cycle < 130) hero.idleLook = 0;   // forward again
+    else                  hero.idleLook = -1;  // look left (flip sprite, mirrored)
   } else {
     hero.idleTick = 0; hero.idleLook = 0;
   }
@@ -475,13 +475,35 @@ function drawHeroSprite(x, y, w, h, facingLeft, stunned, jumping) {
 
   } else {
     // Idle / stun
+    // hero.idleLook: 0 = forward (use normal facing sprite)
+    //                1 = glance right, -1 = glance left (use the OTHER sprite,
+    //                so the head appears to turn toward that side)
+    //
+    // heroImg (hero.png) faces LEFT by default.
+    // heroFlipImg (hero-flip.png) faces RIGHT by default.
+    let idleSrc = heroImg;
+    let idleFlip = shouldFlip;
+
+    if (state === 'idle' && hero.idleLook !== 0 && heroFlipImg && heroFlipImg.complete) {
+      // Determine the world-space direction the hero should glance toward
+      // idleLook=1 means glance to world-right, idleLook=-1 means glance to world-left
+      const glanceRight = hero.idleLook === 1;
+      if (glanceRight) {
+        // Want to face right: heroFlipImg already faces right, no flip needed
+        idleSrc = heroFlipImg;
+        idleFlip = false;
+      } else {
+        // Want to face left: heroFlipImg flipped becomes left-facing
+        idleSrc = heroFlipImg;
+        idleFlip = true;
+      }
+    }
+
     ctx.translate(cx, cy);
     if ((hero.squashAnim || 0) > 0) { const sq = hero.squashAnim / 6; ctx.scale(1 + sq * 0.15, 1 - sq * 0.12); }
-    if (shouldFlip) ctx.scale(-1, 1);
-    ctx.drawImage(heroImg, -w/2, -h, w, h);
+    if (idleFlip) ctx.scale(-1, 1);
+    ctx.drawImage(idleSrc, -w/2, -h, w, h);
     ctx.restore();
-    // Idle look overlay — draw eye-glow in look direction
-    if (state === 'idle' && hero.idleLook !== 0) drawIdleLook(x, y, w, h, hero.idleLook, shouldFlip);
   }
 
   // Stun stars orbit hero head
@@ -528,19 +550,6 @@ function drawAnimLegs(x, y, w, h, frame, shouldFlip) {
   ctx.fillStyle = '#5a3010';
   ctx.fillRect(cxL - lw*1.8 + s.lx, bot - 3, lw + 4, 3);
   ctx.fillRect(cxL + lw*0.2 + s.rx, bot - 3, lw + 4, 3);
-  ctx.restore();
-}
-
-function drawIdleLook(x, y, w, h, look, shouldFlip) {
-  if (look === 0) return;
-  const dir = shouldFlip ? -look : look;
-  const eyeX = x + w * 0.5 + dir * w * 0.14;
-  const eyeY = y + h * 0.21;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(eyeX, eyeY, 2.8, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,210,120,0.75)';
-  ctx.fill();
   ctx.restore();
 }
 
@@ -1310,12 +1319,12 @@ function drawSplash() {
     ctx.save();
     ctx.shadowColor = '#00ff88';
     ctx.shadowBlur = 15;
-    ctx.drawImage(heroSplashImg, W/2 - 55, 178, 110, 165);
+    ctx.drawImage(heroSplashImg, W/2 - 48, 175, 96, 144);
     ctx.restore();
   }
 
   // Instructions box — draw fill first, then only the bottom/side border (no top line through text)
-  const boxX = 20, boxY = 355, boxW = W - 40, boxH = 220;
+  const boxX = 20, boxY = 330, boxW = W - 40, boxH = 255;
   ctx.fillStyle = 'rgba(0,0,0,0.72)';
   roundRect(ctx, boxX, boxY, boxW, boxH, 10);
   ctx.fill();
@@ -1341,13 +1350,15 @@ function drawSplash() {
   ctx.fillStyle = '#00ff88';
   ctx.font = 'bold 13px "Courier New"';
   ctx.textAlign = 'center';
-  ctx.fillText('HOW TO ESCAPE THE ZOMBIE HORDE:', W/2, 376);
+  ctx.fillText('HOW TO ESCAPE THE ZOMBIE HORDE:', W/2, 351);
 
   ctx.fillStyle = '#ccffcc';
   ctx.font = '11px "Courier New"';
   const instructions = [
-    '← → Arrow Keys / Buttons  =  Move Left / Right',
-    'SPACE / Jump Button  =  Jump',
+    '← → Arrow Keys  =  Move Left / Right',
+    'SPACE  =  Jump',
+    'Mobile: Tap LEFT / RIGHT / CENTRE of screen',
+    'to Move Left / Move Right / Jump',
     '',
     'Time your jump UP through a GAP to reach',
     'the next floor. Reach the top to escape!',
@@ -1359,11 +1370,11 @@ function drawSplash() {
     '',
     '♥ ♥ ♥  You have 3 lives — good luck!',
   ];
-  let iy = 395;
+  let iy = 367;
   for (const line of instructions) {
     if (line === '') { iy += 5; continue; }
     ctx.fillText(line, W/2, iy);
-    iy += 16;
+    iy += 15;
   }
 
   // Start splash music if not running
@@ -1734,6 +1745,10 @@ setupTapZone('tapJump',  () => mobileJump  = true,  () => mobileJump  = false);
 heroImg = new Image();
 heroImg.src = './zombie_jump_images/hero_small.png';
 heroImg.onload = () => imagesLoaded++;
+
+heroFlipImg = new Image();
+heroFlipImg.src = './zombie_jump_images/hero_flip.png';
+heroFlipImg.onload = () => imagesLoaded++;
 
 heroRunImg = new Image();
 heroRunImg.src = './zombie_jump_images/hero_run.png';
