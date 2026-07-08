@@ -77,11 +77,12 @@
   "screenshots": [
     {
       "src": "./zombie_jump_images/hero_splash.png",
-      "sizes": "80x120",
+      "sizes": "160x240",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "Zombie Jump gameplay"
+      "label": "Zombie Jump \u2014 splash screen"
     }
   ],
-  "prefer_related_applications": false
+  "prefer_related_applications": false,
+  "id": "com.2eproduction.zombiejump"
 }
