@@ -40,38 +40,30 @@
     image-rendering: pixelated;
     image-rendering: crisp-edges;
   }
-  /* Tap zones — invisible overlays on the canvas for touch/click control.
-     Left third = move left, right third = move right, middle third = jump.
-     Always present but only capture touch/pointer events, never block view. */
-  #tapLeft, #tapRight, #tapJump {
-    position: absolute;
-    top: 0;
-    height: 100%;
-    z-index: 10;
-    /* Completely transparent — no visual at all */
+  /* Single full-screen touch overlay — covers the ENTIRE device screen including
+     the black area below the game canvas. Tap position determines action:
+     left third = move left, centre third = jump, right third = move right.
+     Uses position:fixed so it always covers 100vw x 100vh regardless of
+     the game canvas size or scroll position. */
+  #touchOverlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 100;
     background: transparent;
     -webkit-tap-highlight-color: transparent;
     user-select: none;
-    cursor: pointer;
+    touch-action: none;
   }
-  #tapLeft  { left: 0;         width: 33%; }
-  #tapJump  { left: 33%;       width: 34%; }
-  #tapRight { right: 0;        width: 33%; }
-
-  /* Optional: very subtle hint glow on active press so player gets feedback */
-  #tapLeft.active  { background: rgba(100,255,100,0.06); }
-  #tapRight.active { background: rgba(100,255,100,0.06); }
-  #tapJump.active  { background: rgba(255,255,100,0.06); }
 </style>
 </head>
 <body>
 <div id="gameContainer">
   <canvas id="gameCanvas" width="480" height="640"></canvas>
-  <!-- Invisible tap zones: left=move left, centre=jump, right=move right -->
-  <div id="tapLeft"></div>
-  <div id="tapJump"></div>
-  <div id="tapRight"></div>
 </div>
+<!-- Single full-screen touch overlay: covers entire device screen -->
+<div id="touchOverlay"></div>
 
 <script>
 // ─── SOUND SYSTEM ────────────────────────────────────────────────────────────
@@ -1727,39 +1719,93 @@ document.addEventListener('keyup', (e) => {
 });
 
 // Mobile controls
-// ─── TAP ZONE CONTROLS ────────────────────────────────────────────────────────
-// Three invisible zones over the canvas: left / centre / right
-// Work on touch AND mouse click, alongside existing keyboard controls.
-function setupTapZone(id, onStart, onEnd) {
-  const el = document.getElementById(id);
+// ─── FULL-SCREEN TOUCH OVERLAY ────────────────────────────────────────────────
+// One invisible div covers the entire device screen (including the black area
+// below the game canvas). The tap X position determines the action:
+//   left  third (0–33% of screen width)  → move left
+//   centre third (33–66%)                → jump
+//   right third  (66–100%)               → move right
+// Multiple simultaneous touches are supported (e.g. left + jump together).
 
-  function start(e) {
-    e.preventDefault();
-    el.classList.add('active');
-    onStart();
-    // Advance game state on any tap
+(function() {
+  const overlay = document.getElementById('touchOverlay');
+
+  // Track which zones are currently active by pointer id
+  const activePointers = new Map(); // pointerId → zone ('left'|'jump'|'right')
+
+  function getZone(clientX) {
+    const w = window.innerWidth;
+    if (clientX < w * 0.33)  return 'left';
+    if (clientX < w * 0.67)  return 'jump';
+    return 'right';
+  }
+
+  function activateZone(zone) {
+    if (zone === 'left')  mobileLeft  = true;
+    if (zone === 'jump')  mobileJump  = true;
+    if (zone === 'right') mobileRight = true;
+  }
+
+  function deactivateZone(zone) {
+    if (zone === 'left')  mobileLeft  = false;
+    if (zone === 'jump')  mobileJump  = false;
+    if (zone === 'right') mobileRight = false;
+  }
+
+  function handleGameState() {
     if (inputLockout > 0) return;
     if (state === 'splash') { stopSplashMusic(); state = 'playing'; initGame(); }
     else if (state === 'dead') { if (deadTimer > 0) return; stopSadMusic(); state = 'splash'; inputLockout = 120; startSplashMusic(); }
     else if (state === 'win')  { state = 'splash'; inputLockout = 120; startSplashMusic(); }
   }
-  function end(e) {
+
+  overlay.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    el.classList.remove('active');
-    onEnd();
+    overlay.setPointerCapture(e.pointerId);
+    const zone = getZone(e.clientX);
+    activePointers.set(e.pointerId, zone);
+    activateZone(zone);
+    handleGameState();
+  }, { passive: false });
+
+  overlay.addEventListener('pointermove', (e) => {
+    e.preventDefault();
+    if (!activePointers.has(e.pointerId)) return;
+    const oldZone = activePointers.get(e.pointerId);
+    const newZone = getZone(e.clientX);
+    if (newZone !== oldZone) {
+      // Finger slid from one zone to another — update
+      deactivateZone(oldZone);
+      activePointers.set(e.pointerId, newZone);
+      activateZone(newZone);
+    }
+  }, { passive: false });
+
+  function pointerUp(e) {
+    e.preventDefault();
+    const zone = activePointers.get(e.pointerId);
+    if (zone) {
+      deactivateZone(zone);
+      activePointers.delete(e.pointerId);
+    }
   }
 
-  el.addEventListener('touchstart',  start, { passive: false });
-  el.addEventListener('touchend',    end,   { passive: false });
-  el.addEventListener('touchcancel', end,   { passive: false });
-  el.addEventListener('mousedown',   start);
-  el.addEventListener('mouseup',     end);
-  el.addEventListener('mouseleave',  end);
-}
+  overlay.addEventListener('pointerup',     pointerUp, { passive: false });
+  overlay.addEventListener('pointercancel', pointerUp, { passive: false });
 
-setupTapZone('tapLeft',  () => mobileLeft  = true,  () => mobileLeft  = false);
-setupTapZone('tapRight', () => mobileRight = true,  () => mobileRight = false);
-setupTapZone('tapJump',  () => mobileJump  = true,  () => mobileJump  = false);
+  // Also support plain mouse clicks on desktop (for GoDaddy iframe testing etc.)
+  overlay.addEventListener('mousedown', (e) => {
+    const zone = getZone(e.clientX);
+    activateZone(zone);
+    handleGameState();
+  });
+  overlay.addEventListener('mouseup', (e) => {
+    deactivateZone(getZone(e.clientX));
+  });
+  overlay.addEventListener('mouseleave', () => {
+    mobileLeft = mobileRight = mobileJump = false;
+  });
+})();
 
 
 // ─── LOAD IMAGES ──────────────────────────────────────────────────────────────
